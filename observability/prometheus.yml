@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'kafsys-identity-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['identity-service:8081']
+
+  - job_name: 'kafsys-transaction-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['transaction-service:8082']
+
+  - job_name: 'kafsys-account-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['account-service:8083']
+
+  - job_name: 'kafsys-payment-gateway-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['payment-gateway-service:8084']
+
+  - job_name: 'kafsys-alert-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['alert-service:8085']
+
+  - job_name: 'kafsys-api-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['api-gateway:8080']
+
+  - job_name: 'kafsys-service-registry'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['service-registry:8761']
