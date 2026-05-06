@@ -1,0 +1,149 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  output:
+    ansi:
+      enabled: ALWAYS
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 100
+            redis-rate-limiter.burstCapacity: 200
+            redis-rate-limiter.requestedTokens: 1
+      routes:
+        # Identity Service (public — no JWT required)
+        - id: identity-service-auth
+          uri: lb://identity-service
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - StripPrefix=0
+
+        # Transaction Service (JWT required)
+        - id: transaction-service
+          uri: lb://transaction-service
+          predicates:
+            - Path=/api/v1/transactions/**
+          filters:
+            - JwtAuthenticationFilter
+            - name: CircuitBreaker
+              args:
+                name: transaction-cb
+                fallbackUri: forward:/fallback/transactions
+
+        # Account Service (JWT required)
+        - id: account-service
+          uri: lb://account-service
+          predicates:
+            - Path=/api/v1/accounts/**
+          filters:
+            - JwtAuthenticationFilter
+            - name: CircuitBreaker
+              args:
+                name: account-cb
+                fallbackUri: forward:/fallback/accounts
+
+        # Payment Gateway Service (JWT required)
+        - id: payment-gateway-service
+          uri: lb://payment-gateway-service
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - JwtAuthenticationFilter
+            - name: CircuitBreaker
+              args:
+                name: payment-cb
+                fallbackUri: forward:/fallback/payments
+
+        # Alert Service (JWT required)
+        - id: alert-service
+          uri: lb://alert-service
+          predicates:
+            - Path=/api/v1/alerts/**
+          filters:
+            - JwtAuthenticationFilter
+
+  globalcors:
+    cors-configurations:
+      '[/**]':
+        allowed-origins: "*"
+        allowed-methods: "GET,POST,PUT,DELETE,OPTIONS"
+        allowed-headers: "*"
+        exposed-headers: "Authorization"
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://admin:kafsys-registry-secret@localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+kafsys:
+  jwt:
+    secret: ${JWT_SECRET:kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      transaction-cb:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+      account-cb:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+      payment-cb:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    urls:
+      - name: Transaction Service
+        url: /api/v1/transactions/v3/api-docs
+      - name: Account Service
+        url: /api/v1/accounts/v3/api-docs
+      - name: Payment Gateway
+        url: /api/v1/payments/v3/api-docs
+      - name: Identity Service
+        url: /api/v1/auth/v3/api-docs
+      - name: Alert Service
+        url: /api/v1/alerts/v3/api-docs
+
+logging:
+  level:
+    com.kafsys: INFO
+    org.springframework.cloud.gateway: DEBUG
