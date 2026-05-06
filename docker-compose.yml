@@ -1,0 +1,382 @@
+version: "3.9"
+
+# ============================================================
+# Kafsys — Cloud-Native Banking Transaction Processing Platform
+# Full-stack Docker Compose: Infrastructure + All Microservices
+# ============================================================
+
+networks:
+  kafsys-net:
+    driver: bridge
+
+volumes:
+  postgres-identity-data:
+  postgres-transaction-data:
+  postgres-account-data:
+  postgres-payment-data:
+  postgres-alert-data:
+  redis-data:
+  kafka-data:
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafsys-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      CLUSTER_ID: kafsys-cluster-v1
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: kafsys-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-identity:
+    image: postgres:17-alpine
+    container_name: kafsys-postgres-identity
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: kafsys_identity
+      POSTGRES_USER: kafsys
+      POSTGRES_PASSWORD: kafsys_password
+    volumes:
+      - postgres-identity-data:/var/lib/postgresql/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kafsys -d kafsys_identity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-transaction:
+    image: postgres:17-alpine
+    container_name: kafsys-postgres-transaction
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: kafsys_transactions
+      POSTGRES_USER: kafsys
+      POSTGRES_PASSWORD: kafsys_password
+    volumes:
+      - postgres-transaction-data:/var/lib/postgresql/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kafsys -d kafsys_transactions"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-account:
+    image: postgres:17-alpine
+    container_name: kafsys-postgres-account
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: kafsys_accounts
+      POSTGRES_USER: kafsys
+      POSTGRES_PASSWORD: kafsys_password
+    volumes:
+      - postgres-account-data:/var/lib/postgresql/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kafsys -d kafsys_accounts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-payment:
+    image: postgres:17-alpine
+    container_name: kafsys-postgres-payment
+    restart: unless-stopped
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: kafsys_payments
+      POSTGRES_USER: kafsys
+      POSTGRES_PASSWORD: kafsys_password
+    volumes:
+      - postgres-payment-data:/var/lib/postgresql/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kafsys -d kafsys_payments"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-alert:
+    image: postgres:17-alpine
+    container_name: kafsys-postgres-alert
+    restart: unless-stopped
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: kafsys_alerts
+      POSTGRES_USER: kafsys
+      POSTGRES_PASSWORD: kafsys_password
+    volumes:
+      - postgres-alert-data:/var/lib/postgresql/data
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kafsys -d kafsys_alerts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Observability ───────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: kafsys-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - kafsys-net
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: kafsys-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: kafsys-grafana
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    networks:
+      - kafsys-net
+    depends_on:
+      - prometheus
+
+  # ── Microservices ───────────────────────────────────────────
+
+  service-registry:
+    build:
+      context: ./service-registry
+      dockerfile: Dockerfile
+    image: kafsys/service-registry:1.0.0
+    container_name: kafsys-service-registry
+    restart: unless-stopped
+    ports:
+      - "8761:8761"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    networks:
+      - kafsys-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8761/actuator/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  identity-service:
+    build:
+      context: ./identity-service
+      dockerfile: Dockerfile
+    image: kafsys/identity-service:1.0.0
+    container_name: kafsys-identity-service
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-identity
+      DB_NAME: kafsys_identity
+      DB_USERNAME: kafsys
+      DB_PASSWORD: kafsys_password
+      JWT_SECRET: kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+      FLYWAY_ENABLED: "true"
+    depends_on:
+      postgres-identity:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    image: kafsys/api-gateway:1.0.0
+    container_name: kafsys-api-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      REDIS_HOST: redis
+      JWT_SECRET: kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+    depends_on:
+      redis:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
+
+  transaction-service:
+    build:
+      context: ./transaction-service
+      dockerfile: Dockerfile
+    image: kafsys/transaction-service:1.0.0
+    container_name: kafsys-transaction-service
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-transaction
+      DB_NAME: kafsys_transactions
+      DB_USERNAME: kafsys
+      DB_PASSWORD: kafsys_password
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+      FLYWAY_ENABLED: "true"
+    depends_on:
+      postgres-transaction:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
+
+  account-service:
+    build:
+      context: ./account-service
+      dockerfile: Dockerfile
+    image: kafsys/account-service:1.0.0
+    container_name: kafsys-account-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-account
+      DB_NAME: kafsys_accounts
+      DB_USERNAME: kafsys
+      DB_PASSWORD: kafsys_password
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+      FLYWAY_ENABLED: "true"
+    depends_on:
+      postgres-account:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
+
+  payment-gateway-service:
+    build:
+      context: ./payment-gateway-service
+      dockerfile: Dockerfile
+    image: kafsys/payment-gateway-service:1.0.0
+    container_name: kafsys-payment-gateway
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-payment
+      DB_NAME: kafsys_payments
+      DB_USERNAME: kafsys
+      DB_PASSWORD: kafsys_password
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+      FLYWAY_ENABLED: "true"
+    depends_on:
+      postgres-payment:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
+
+  alert-service:
+    build:
+      context: ./alert-service
+      dockerfile: Dockerfile
+    image: kafsys/alert-service:1.0.0
+    container_name: kafsys-alert-service
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres-alert
+      DB_NAME: kafsys_alerts
+      DB_USERNAME: kafsys
+      DB_PASSWORD: kafsys_password
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
+      FLYWAY_ENABLED: "true"
+    depends_on:
+      postgres-alert:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    networks:
+      - kafsys-net
