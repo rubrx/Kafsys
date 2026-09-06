@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,12 +25,32 @@ public class JwtAuthenticationFilter extends AbstractGatewayFilterFactory<JwtAut
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private static final String BEARER_PREFIX = "Bearer ";
+    private static final String INSECURE_DEV_SENTINEL =
+            "INSECURE-DEV-SECRET-DO-NOT-USE-IN-PROD-8f2c1a4b6e9d3c7a5f1b8e2c4d6a9f3b";
+    private static final int MIN_SECRET_BYTES = 32;
 
     @Value("${kafsys.jwt.secret}")
     private String jwtSecret;
 
     public JwtAuthenticationFilter() {
         super(Config.class);
+    }
+
+    @PostConstruct
+    void validateSecret() {
+        if (jwtSecret == null || jwtSecret.isBlank()) {
+            throw new IllegalStateException("kafsys.jwt.secret / JWT_SECRET must be set (>= 32 chars)");
+        }
+        if (jwtSecret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "kafsys.jwt.secret must be at least " + MIN_SECRET_BYTES + " bytes for HS256");
+        }
+        if (INSECURE_DEV_SENTINEL.equals(jwtSecret)) {
+            log.warn("=====================================================================");
+            log.warn("SECURITY WARNING: JWT_SECRET is using the INSECURE dev-only default.");
+            log.warn("Export JWT_SECRET before running outside local development.");
+            log.warn("=====================================================================");
+        }
     }
 
     @Override

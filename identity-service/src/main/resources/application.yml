@@ -37,7 +37,9 @@ eureka:
 
 kafsys:
   jwt:
-    secret: ${JWT_SECRET:kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256}
+    # SECURITY: default is an INSECURE dev sentinel. Production MUST supply JWT_SECRET (>= 32 chars).
+    # JwtService logs a WARN at startup if the sentinel is in use.
+    secret: ${JWT_SECRET:INSECURE-DEV-SECRET-DO-NOT-USE-IN-PROD-8f2c1a4b6e9d3c7a5f1b8e2c4d6a9f3b}
     access-token-expiry-ms: ${JWT_ACCESS_EXPIRY_MS:900000}
     refresh-token-expiry-ms: ${JWT_REFRESH_EXPIRY_MS:604800000}
 
@@ -65,6 +67,8 @@ springdoc:
     version: 1.0.0
 
 logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"
   level:
     com.kafsys: INFO
 

@@ -1,8 +1,8 @@
-version: "3.9"
-
 # ============================================================
 # Kafsys — Cloud-Native Banking Transaction Processing Platform
 # Full-stack Docker Compose: Infrastructure + All Microservices
+#
+# Requires: JWT_SECRET (>= 32 chars) in .env — see .env.example
 # ============================================================
 
 networks:
@@ -189,8 +189,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: kafsys-grafana
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-kafsys-grafana}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - kafsys-net
     depends_on:
@@ -232,7 +237,7 @@ services:
       DB_NAME: kafsys_identity
       DB_USERNAME: kafsys
       DB_PASSWORD: kafsys_password
-      JWT_SECRET: kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — see .env.example}
       EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
       FLYWAY_ENABLED: "true"
     depends_on:
@@ -255,7 +260,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
       REDIS_HOST: redis
-      JWT_SECRET: kafsys-super-secret-jwt-key-must-be-at-least-256-bits-long-for-hs256
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — see .env.example}
       EUREKA_URL: http://admin:kafsys-registry-secret@service-registry:8761/eureka/
     depends_on:
       redis:

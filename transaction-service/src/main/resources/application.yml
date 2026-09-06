@@ -85,6 +85,8 @@ resilience4j:
         waitDurationInOpenState: 10s
 
 logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"
   level:
     com.kafsys: INFO
     org.apache.kafka.streams: WARN

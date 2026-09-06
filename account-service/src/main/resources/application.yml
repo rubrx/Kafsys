@@ -64,6 +64,8 @@ springdoc:
     version: 1.0.0
 
 logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"
   level:
     com.kafsys: INFO
 

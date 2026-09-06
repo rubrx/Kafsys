@@ -24,10 +24,13 @@ Kafsys is a production-grade backend platform simulating a **real-world banking 
 
 **Key capabilities:**
 - Idempotent fund transfers with distributed SAGA coordination
-- Account lifecycle management with KYC verification
+- Account lifecycle management with KYC verification and pessimistic balance locking
 - Real-time transaction alerts via event-driven pipeline
 - JWT authentication with role-based access control
-- API Gateway with rate limiting and circuit breaker
+- API Gateway with rate limiting, circuit breaker, and JWT enforcement
+- End-to-end correlation IDs across HTTP and Kafka boundaries, surfaced in every log line
+- Dead-letter topics with exponential backoff on every Kafka consumer
+- Pre-provisioned Grafana dashboard + Prometheus scrape config for every service
 
 ---
 
@@ -201,11 +204,29 @@ java -jar api-gateway/target/api-gateway-1.0.0.jar                 # start last
 ### Option 2 — Docker Compose (full stack with PostgreSQL)
 
 ```bash
+cp .env.example .env
+# Edit .env: generate JWT_SECRET with `openssl rand -base64 48`
+
 mvn clean package -DskipTests
 docker compose up --build
 ```
 
 > Wait ~60 seconds for all services to register with Eureka.
+>
+> **Grafana** is pre-provisioned with the `Kafsys — Platform Overview` dashboard
+> (anonymous read-only access on <http://localhost:3000/dashboards>).
+
+### Smoke test the full SAGA
+
+Once the stack is up, run the bundled end-to-end script:
+
+```bash
+./scripts/demo.sh
+```
+
+The script logs in as the seeded admin, discovers two seeded accounts, initiates
+a transfer, polls until the SAGA reaches a terminal status, and verifies that
+alerts have been persisted.
 
 ---
 
@@ -330,9 +351,20 @@ The platform loads realistic data on first startup (local/H2 mode).
 |---|---|---|
 | Eureka Dashboard | http://localhost:8761 | admin / kafsys-registry-secret |
 | Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / kafsys-grafana |
+| Grafana | http://localhost:3000 | admin / `GRAFANA_ADMIN_PASSWORD` (default `kafsys-grafana`) |
+| Grafana dashboard | http://localhost:3000/d/kafsys-overview | anonymous viewer enabled |
 
 All services expose `/actuator/health` and `/actuator/prometheus`.
+
+**Correlation IDs**: The API gateway attaches an `X-Correlation-Id` (or honors a
+client-supplied one) to every request. Downstream services push it into SLF4J
+MDC, so every log line carries `[service-name,correlation-id]`. The same ID is
+propagated across Kafka message headers, letting you trace a single business
+operation across HTTP + async hops.
+
+**Kafka dead-letter topics**: Every consumer is wired with a `DefaultErrorHandler`
+that uses exponential backoff (500 ms → 10 s, capped at 30 s total) and routes
+poison messages to `<topic>.DLT` instead of stalling the partition.
 
 ---
 
@@ -342,17 +374,25 @@ All services expose `/actuator/health` and `/actuator/prometheus`.
 kafsys/
 ├── pom.xml                          # Parent POM — Spring Boot 3.4.5
 ├── docker-compose.yml               # Full-stack orchestration
+├── .env.example                     # Required env vars (JWT_SECRET, ...)
+├── scripts/
+│   └── demo.sh                      # End-to-end SAGA smoke test
 ├── observability/
-│   └── prometheus.yml
+│   ├── prometheus.yml               # Scrape config for all services
+│   └── grafana/
+│       ├── provisioning/            # Auto-registered datasource + dashboards
+│       └── dashboards/
+│           └── kafsys-overview.json # Uptime · latency · errors · Kafka lag
 ├── .github/workflows/
-│   └── kafsys-ci.yml                # CI: build → test → Docker → ECS
+│   └── kafsys-ci.yml                # CI: build → test → JaCoCo → Docker → ECS
 │
 ├── common-domain/                   # Shared library
 │   └── com/kafsys/common/
 │       ├── dto/                     # ApiResponse, PagedResponse
 │       ├── enums/                   # TransactionStatus, AccountStatus, KycStatus
 │       ├── event/                   # TransactionEvent, AlertEvent
-│       └── exception/               # KafsysException hierarchy
+│       ├── exception/               # KafsysException hierarchy
+│       └── tracing/                 # Correlation ID + Kafka header propagation
 │
 ├── service-registry/                # :8761 — Eureka
 ├── api-gateway/                     # :8080 — Spring Cloud Gateway
@@ -376,6 +416,42 @@ kafsys/
 **JWT header forwarding** — The API Gateway validates JWTs and injects `X-Auth-UserId` and `X-Auth-Roles` into upstream requests. Downstream services trust these headers, avoiding redundant token validation on every hop.
 
 **Database-per-service** — Each microservice owns its PostgreSQL schema. Cross-service data flows exclusively through Kafka events, enforcing hard bounded-context isolation.
+
+**Correlation across async boundaries** — HTTP ingress at the gateway generates
+(or honors) an `X-Correlation-Id`; a servlet filter in every downstream service
+copies it into MDC. A Kafka `ProducerInterceptor` writes the same ID to record
+headers and a Spring Kafka `RecordInterceptor` restores it on consume — so a
+single business operation is traceable across every log line and every hop.
+
+**Poison-pill isolation** — Every consumer runs behind a `DefaultErrorHandler`
+with `ExponentialBackOff` + `DeadLetterPublishingRecoverer`. Failed messages
+retry with backoff, then land on `<topic>.DLT` — the partition never stalls.
+
+---
+
+## Testing
+
+```bash
+mvn verify
+```
+
+Unit tests use JUnit 5, AssertJ, and Mockito with constructor injection so
+every service can be exercised without Spring context. Coverage is generated
+per-module via JaCoCo (`target/site/jacoco/index.html`).
+
+| Module | Tests |
+|---|---|
+| common-domain | 15 |
+| identity-service | 16 |
+| transaction-service | 7 |
+| account-service | 11 |
+| alert-service | 7 |
+| **Total** | **56** |
+
+Focused on the invariants an interviewer will probe: JWT signing/validation,
+credential rejection, balance reservation math, idempotency-key deduping, SAGA
+status transitions to terminal state, Kafka header propagation, and correlation
+ID MDC lifecycle.
 
 ---
 

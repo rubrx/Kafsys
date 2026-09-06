@@ -27,6 +27,9 @@ logs/
 .env
 .env.local
 
+# Local-only deep architecture doc (README covers what a reviewer needs)
+ARCHITECTURE.md
+
 # Compiled class files
 *.class
 
